@@ -1,0 +1,9 @@
+version = 0.1
+[default]
+[default.deploy]
+[default.deploy.parameters]
+stack_name = "logs-to-slack"
+s3_bucket = "aws-sam-cli-managed-default-samclisourcebucket-1ul4iyvsu9asv"
+s3_prefix = "logs-to-slack"
+region = "us-east-1"
+capabilities = "CAPABILITY_IAM"

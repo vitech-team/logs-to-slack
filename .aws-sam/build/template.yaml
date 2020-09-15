@@ -1,0 +1,44 @@
+Resources:
+  Function:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: app.handler
+      CodeUri: Function
+      Runtime: nodejs12.x
+      Timeout: 3
+      MemorySize: 128
+      Environment:
+        Variables:
+          APPLICATION_NAME: Immediate Pay
+          CHANNEL_NAME: imm-pay-staging-logs
+          CLASS_PACKAGES:
+          - com.immediate.pay
+          EXCEPTION_PACKAGES:
+          - com.immediate.pay.core.exceptions
+          - com.immediate.pay.exceptions
+          - com\.immediate\.pay\..*.exceptions
+          EXCEPTION_PACKAGES_TO_IGNORE: []
+          PACKAGE_TO_MODULE_MAPPING:
+            com.immediate.pay.core.exceptions: immediate-pay-data
+            com.immediate.pay.core: immediate-pay-core
+            com.immediate.pay.data.tools: immediate-pay-core
+            com.immediate.pay.general: immediate-pay-general
+            com.immediate.pay.controller: immediate-pay-web
+            com.immediate.pay.filters: immediate-pay-web
+            com.immediate.pay.mappers: immediate-pay-web
+            com.immediate.pay.security: immediate-pay-web
+            com.immediate.pay.data: immediate-pay-data
+            com.immediate.pay.exception: immediate-pay-data
+            com.immediate.pay.liquibase: immediate-pay-data
+            com.immediate.pay.aws: immediate-pay-services
+            com.immediate.pay.configurations: immediate-pay-services
+            com.immediate.pay.managers: immediate-pay-services
+            com.immediate.pay.providers: immediate-pay-services
+            com.immediate.pay.services: immediate-pay-services
+            com.immediate.pay.tasks: immediate-pay-services
+            com.immediate.pay.utils: immediate-pay-services
+            com.immediate.pay.integration: integration
+            com.immediate.pay.(\w+).(\w+): $1-$2
+          SLACK_PATH: /services/T0BEDV9DE/B016PMMPZ7F/Xe22ZW1FMqoFLeesn9sOz2E4
+          VCS_FILE_URL: https://gitlab.com/immediate-pay/core/-/blob/
+          VCS_SEARCH_URL: https://gitlab.com/search?utf8=%E2%9C%93&snippets=false&scope=&repository_ref=master&group_id=4947284&project_id=11673575&search=
