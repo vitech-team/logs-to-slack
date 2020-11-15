@@ -200,6 +200,7 @@ function formatStackTrace(stackTrace) {
 
     return stackTraceLines.reduce((result, line) => {
         if (causedByLine(line)) {
+            result.push("!@#$%^&*");
             result.push(formatException(line));
         }
         if (atLine(line)) {
@@ -239,7 +240,10 @@ function buildKibanaUrl(logObject) {
 }
 
 function prepareMessage(logObject) {
-    const formattedStackTrace =  formatStackTrace(logObject.stack_trace).join("\n").substring(0, 2999);
+    const formattedStackTrace =  formatStackTrace(logObject.stack_trace)
+        .join("\n")
+        .split("!@#$%^&*\n")
+        .filter(str => str !== "");
     const serviceUrl = getFileUrl(logObject.service, false);
     const service = serviceUrl != null ? `<${serviceUrl}|${logObject.service}>` : logObject.service ;
     const messageColor = calculateColor(logObject);
@@ -271,13 +275,6 @@ function prepareMessage(logObject) {
                     },
                     {
                         "type": "divider"
-                    },
-                    {
-                        "type": "section",
-                        "text": {
-                            "type": "mrkdwn",
-                            "text": formattedStackTrace
-                        }
                     }
                 ]
             }
@@ -294,6 +291,18 @@ function prepareMessage(logObject) {
                 },
                 "url": kibanaUrl
             };
+    }
+
+    if (formattedStackTrace) {
+        formattedStackTrace.forEach(elem => {
+            result.attachments[0].blocks.push({
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": elem
+                }
+            });
+        });
     }
 
     return result;
