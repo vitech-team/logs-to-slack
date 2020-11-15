@@ -100,6 +100,26 @@ const EXCEPTION_PACKAGES = JSON.parse(env.EXCEPTION_PACKAGES);
 const PACKAGE_TO_MODULE_MAPPING = JSON.parse(env.PACKAGE_TO_MODULE_MAPPING);
 
 /**
+ * Kibana base URL to be able to navigate to event
+ *
+ * The link will open the exact event, however it will be possible to navigate to previous events from there.
+ *
+ * Example: https://vpc-es-1-lkj345lkj345kljn6snrbylwe.us-east-1.es.amazonaws.com/_plugin/kibana/app/kibana
+ */
+const KIBANA_BASE_URL = env.KIBANA_BASE_URL;
+
+/**
+ * Kibana context URL
+ *
+ * Sometimes this method may noe work due to https://github.com/elastic/kibana/issues/23231
+ *
+ * See https://www.elastic.co/guide/en/kibana/6.8/document-context.html
+ *
+ * Example: https://vpc-es-1-lkj345lkj345kljn6snrbylwe.us-east-1.es.amazonaws.com/_plugin/kibana/app/kibana#/context/abcde20-cded-21ac-8343-2234e50f0ade/some-type/
+ */
+const KIBANA_CONTEXT_URL = env.KIBANA_CONTEXT_URL;
+
+/**
  * TODO:
  *      * support version parsing
  *      * implement filters (include, exclude)
@@ -204,13 +224,28 @@ function calculateColor(logObject) {
             : '#FFD300';
 }
 
+function buildKibanaUrl(logObject) {
+    if (KIBANA_BASE_URL) {
+        const fromTime = new Date(new Date(logObject.time).getTime() - 5 * 60 * 1000).toISOString();
+        const toTime = new Date(new Date(logObject.time).getTime() + 5 * 60 * 1000).toISOString();
+        return KIBANA_BASE_URL + `#/discover?_g=(filters:!(),refreshInterval:(pause:!t,value:0),time:(from:'${fromTime}',to:'${toTime}'))&_a=(columns:!(_source),filters:!(),interval:auto,query:(language:kuery,query:'@id:%22${logObject.id}%22'),sort:!(!(time,desc)))`;
+    }
+
+    if (KIBANA_CONTEXT_URL) {
+        return KIBANA_CONTEXT_URL + logObject.id;
+    }
+
+    return null;
+}
+
 function prepareMessage(logObject) {
     const formattedStackTrace =  formatStackTrace(logObject.stack_trace).join("\n").substring(0, 2999);
     const serviceUrl = getFileUrl(logObject.service, false);
     const service = serviceUrl != null ? `<${serviceUrl}|${logObject.service}>` : logObject.service ;
     const messageColor = calculateColor(logObject);
+    const kibanaUrl = buildKibanaUrl(logObject);
 
-    return {
+    const result = {
         "channel": CHANNEL_NAME,
         "text": `*${APPLICATION_NAME}* @ ${logObject.time}`,
         "icon_emoji": ":aws:",
@@ -248,9 +283,23 @@ function prepareMessage(logObject) {
             }
         ]
     };
+
+    if (kibanaUrl) {
+        result.attachments[0].blocks[1].accessory =
+            {
+                "type": "button",
+                "text": {
+                    "type": "plain_text",
+                    "text": "Open in Kibana"
+                },
+                "url": kibanaUrl
+            };
+    }
+
+    return result;
 }
 
-// Send Slack messaeg
+// Send Slack message
 async function notifySlack(message) {
     return new Promise((resolve, reject) => {
         var options = {
@@ -282,7 +331,11 @@ exports.handler = async (event, context) => {
 
     await Promise.all(data
         .logEvents
-        .map(event => JSON.parse(event.message))
+        .map(m => {
+            let e = JSON.parse(m.message);
+            e.id = m.id;
+            return e;
+        })
         .sort((a, b) => new Date(a.time).getTime() - new Date(b.time).getTime())
         .map(logObject => prepareMessage(logObject))
         .map(message => notifySlack(message)));
