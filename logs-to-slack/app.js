@@ -1,4 +1,4 @@
-var https = require('https');
+const https = require('https');
 const zlib = require('zlib');
 const {env} = require('process');
 
@@ -131,10 +131,15 @@ const KIBANA_BASE_URL = env.KIBANA_BASE_URL;
 const KIBANA_CONTEXT_URL = env.KIBANA_CONTEXT_URL;
 
 /**
- * TODO:
- *      * implement filters (include, exclude)
- *      * add nodejs errors support
+ * List of regexp filters to use to filter out not relevant logs
+ *
+ * Example: {
+ *      "msg": "Valid authentication is missing in context",
+ *      "stack_trace": "org.springframework.security.web.firewall.RequestRejectedException",
+ *      "stack_trace": "java.lang.NumberFormatException: For input string: \"\""
+ * }
  */
+const EXCLUDE_FILTERS = JSON.parse(env.EXCLUDE_FILTERS || "{}");
 
 const slackAPIUrl = `hooks.slack.com`;
 
@@ -146,7 +151,7 @@ const decodeAndUnzip = (data) => {
 }
 
 function getFileUrl(line, hasMethodName, version) {
-    const revision = version !== undefined && !version.includes("IS_UNDEFINED") 
+    const revision = version !== undefined && !version.includes("IS_UNDEFINED")
         ? (version.includes("-SNAPSHOT")
             ? version.substring(version.length-17, version.length-9)
             : version)
@@ -154,7 +159,7 @@ function getFileUrl(line, hasMethodName, version) {
     const javaFolder = "src/main/java";
 
     for (let package in PACKAGE_TO_MODULE_MAPPING) {
-        var modulePath = PACKAGE_TO_MODULE_MAPPING[package];
+        let modulePath = PACKAGE_TO_MODULE_MAPPING[package];
 
         const regex = hasMethodName
             ? new RegExp(`(${package}[\\.\\d\\w_]*)(\\.[\\d\\w_$]*){2}\\(([^:]*):(\\d+)\\)`)
@@ -163,9 +168,9 @@ function getFileUrl(line, hasMethodName, version) {
         let m;
         if ((m = regex.exec(line)) !== null) {
             let groupsToSkip = 0;
-            for (var i = 1; i < 5; i++) {
+            for (let i = 1; i < 5; i++) {
                 const replacedPath = modulePath.replace(`$${i}`, m[i + 1]);
-                if (replacedPath != modulePath) {
+                if (replacedPath !== modulePath) {
                     modulePath = replacedPath;
                     groupsToSkip++;
                 }
@@ -181,7 +186,7 @@ function getFileUrl(line, hasMethodName, version) {
                 return `${VCS_FILE_URL}/${revision}/${modulePath}/${javaFolder}/${packagePath.replace(/\./g, "/")}/${className}.java`.replace(/([^:])\/{2,}/g, "$1/");
             }
         }
-    };
+    }
 
     return null;
 }
@@ -191,7 +196,7 @@ function formatException(line) {
 }
 
 function formatCallLine(line, version) {
-    var url = getFileUrl(line, true, version);
+    const url = getFileUrl(line, true, version);
 
     if (url) {
         return CLASS_PACKAGES.reduce((result, pattern) => result.replace(new RegExp("at " + pattern + "\\."), ""), line)
@@ -208,9 +213,9 @@ function formatCallLine(line, version) {
 function formatStackTrace(stackTrace, version) {
     const stackTraceLines = stackTrace != null ? stackTrace.split("\n") : [];
 
-    const causedByLine = line => line != "" && !line.startsWith("\t");
+    const causedByLine = line => line !== "" && !line.startsWith("\t");
     const atLine = line => line.startsWith("\t");
-    const isOurPackage = line => CLASS_PACKAGES.some(package => line.includes("at " + package + "."));
+    const isOurPackage = line => CLASS_PACKAGES.some(classPackage => line.includes("at " + classPackage + "."));
 
     return stackTraceLines.reduce((result, line) => {
         if (causedByLine(line)) {
@@ -221,7 +226,7 @@ function formatStackTrace(stackTrace, version) {
             if (isOurPackage(line)) {
                 result.push(formatCallLine(line, version));
             } else {
-                if (result[result.length - 1] != "\t...") {
+                if (result[result.length - 1] !== "\t...") {
                     result.push("\t...");
                 }
             }
@@ -234,7 +239,7 @@ function formatStackTrace(stackTrace, version) {
 function calculateColor(logObject) {
     return logObject.msg.includes('CRITICAL')
         ? '#000000'
-        : logObject.sev == 'ERROR'
+        : logObject.sev === 'ERROR'
             ? '#FF0000'
             : '#FFD300';
 }
@@ -257,16 +262,16 @@ function formatVersion(version) {
     if (version === undefined || version.includes("IS_UNDEFINED") ) {
         return "undefined";
     }
-    
+
     if (version.includes("-SNAPSHOT")) {
         const revision = version.substring(version.length-17, version.length-9);
         const branchWithVersion = version.substring(0, version.length - 18)
         const branch = branchWithVersion.substring(branchWithVersion.indexOf('-') + 1);
-        
+
         return `<${VCS_TREE_URL}${revision}|${revision}> @ <${VCS_TREE_URL}${branch}|${branch}>`;
     } else {
         const tag = version;
-        
+
         return `<${VCS_TREE_URL}${tag}|${tag}>`;
     }
 }
@@ -351,7 +356,7 @@ function prepareMessage(logObject) {
 // Send Slack message
 async function notifySlack(message) {
     return new Promise((resolve, reject) => {
-        var options = {
+        const options = {
             "method": "POST",
             "hostname": slackAPIUrl,
             "path": SLACK_PATH,
@@ -360,7 +365,7 @@ async function notifySlack(message) {
             }
         };
         //_________________________________________________
-        var req = https.request(options, (res) => {
+        const req = https.request(options, (res) => {
             resolve(res);
         });
 
@@ -371,6 +376,16 @@ async function notifySlack(message) {
         req.write(JSON.stringify(message));
         req.end();
     });
+}
+
+function exclude(logObject) {
+    for (const [key, value] of Object.entries(EXCLUDE_FILTERS)) {
+        if (logObject[key] && logObject[key].match(value)) {
+            return false;
+        }
+    }
+
+    return true;
 }
 
 exports.handler = async (event, context) => {
@@ -385,7 +400,8 @@ exports.handler = async (event, context) => {
             e.id = m.id;
             return e;
         })
+        .filter(exclude)
         .sort((a, b) => new Date(a.time).getTime() - new Date(b.time).getTime())
-        .map(logObject => prepareMessage(logObject))
-        .map(message => notifySlack(message)));
+        .map(prepareMessage)
+        .map(notifySlack));
 }
