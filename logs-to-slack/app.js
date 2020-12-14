@@ -135,8 +135,8 @@ const decodeAndUnzip = (data) => {
     return JSON.parse(jsonPayload);
 }
 
-function getFileUrl(line, hasMethodName) {
-    const revision = "master";
+function getFileUrl(line, hasMethodName, version) {
+    const revision = version !== undefined && !version.includes("IS_UNDEFINED") ? version : "master";
     const javaFolder = "src/main/java";
 
     for (let package in PACKAGE_TO_MODULE_MAPPING) {
@@ -176,8 +176,8 @@ function formatException(line) {
     return "*" + EXCEPTION_PACKAGES.reduce((result, pattern) => result.replace(new RegExp(pattern + "\\."), ""), line) + "*";
 }
 
-function formatCallLine(line) {
-    var url = getFileUrl(line, true);
+function formatCallLine(line, version) {
+    var url = getFileUrl(line, true, version);
 
     if (url) {
         return CLASS_PACKAGES.reduce((result, pattern) => result.replace(new RegExp("at " + pattern + "\\."), ""), line)
@@ -191,7 +191,7 @@ function formatCallLine(line) {
     }
 }
 
-function formatStackTrace(stackTrace) {
+function formatStackTrace(stackTrace, version) {
     const stackTraceLines = stackTrace != null ? stackTrace.split("\n") : [];
 
     const causedByLine = line => line != "" && !line.startsWith("\t");
@@ -205,7 +205,7 @@ function formatStackTrace(stackTrace) {
         }
         if (atLine(line)) {
             if (isOurPackage(line)) {
-                result.push(formatCallLine(line));
+                result.push(formatCallLine(line, version));
             } else {
                 if (result[result.length - 1] != "\t...") {
                     result.push("\t...");
@@ -240,12 +240,12 @@ function buildKibanaUrl(logObject) {
 }
 
 function prepareMessage(logObject) {
-    const formattedStackTrace =  formatStackTrace(logObject.stack_trace)
+    const formattedStackTrace = formatStackTrace(logObject.stack_trace, logObject.ver)
         .join("\n")
         .split("!@#$%^&*\n")
         .filter(str => str !== "");
-    const serviceUrl = getFileUrl(logObject.service, false);
-    const service = serviceUrl != null ? `<${serviceUrl}|${logObject.service}>` : logObject.service ;
+    const serviceUrl = getFileUrl(logObject.service, false, logObject.ver);
+    const service = serviceUrl != null ? `<${serviceUrl}|${logObject.service}>` : logObject.service;
     const messageColor = calculateColor(logObject);
     const kibanaUrl = buildKibanaUrl(logObject);
 
