@@ -121,7 +121,6 @@ const KIBANA_CONTEXT_URL = env.KIBANA_CONTEXT_URL;
 
 /**
  * TODO:
- *      * support version parsing
  *      * implement filters (include, exclude)
  *      * add nodejs errors support
  */
