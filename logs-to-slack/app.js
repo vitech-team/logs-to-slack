@@ -65,6 +65,17 @@ const VCS_SEARCH_URL = env.VCS_SEARCH_URL;
 const VCS_FILE_URL = env.VCS_FILE_URL;
 
 /**
+ * Url prefix used to build VCS branch or tag url
+ * We use this url when display application version
+ *
+ * The final URL would be
+ *      VCS_TREE_URL + tagOrVersionName
+ *
+ * Example: https://gitlab.com/awesome-project/core/-/tree/
+ */
+const VCS_TREE_URL = env.VCS_TREE_URL;
+
+/**
  * List of project base packages.
  * Used to shorten class names in notification, because Slack forces word wrap, so long lines look ugly.
  * Multiple packages could be specified, each one is actually regexp pattern
@@ -242,6 +253,23 @@ function buildKibanaUrl(logObject) {
     return null;
 }
 
+function formatVersion(version) {
+    if (version === undefined || version.includes("IS_UNDEFINED") ) {
+        return "undefined";
+    }
+    
+    if (version.includes("-SNAPSHOT")) {
+        const revision = version.substring(version.length-17, version.length-9);
+        const branch = version.substring(0, version.length - 18);
+        
+        return `<${VCS_TREE_URL}${revision}|${revision}> @ <${VCS_TREE_URL}${branch}|${branch}>`;
+    } else {
+        const tag = version;
+        
+        return `<${VCS_TREE_URL}${tag}|${tag}>`;
+    }
+}
+
 function prepareMessage(logObject) {
     const formattedStackTrace = formatStackTrace(logObject.stack_trace, logObject.ver)
         .join("\n")
@@ -265,6 +293,14 @@ function prepareMessage(logObject) {
                         "text": {
                             "type": "mrkdwn",
                             "text": "*Class:* " + service
+                        },
+                        "block_id": "text0"
+                    },
+                    {
+                        "type": "section",
+                        "text": {
+                            "type": "mrkdwn",
+                            "text": "*Version:* " + formatVersion(logObject.ver)
                         },
                         "block_id": "text1"
                     },
