@@ -137,7 +137,7 @@ const decodeAndUnzip = (data) => {
 function getFileUrl(line, hasMethodName, version) {
     const revision = version !== undefined && !version.includes("IS_UNDEFINED") 
         ? (version.includes("-SNAPSHOT")
-            ? version.substring(str.length-17, str.length-9)
+            ? version.substring(version.length-17, version.length-9)
             : version)
         : "master";
     const javaFolder = "src/main/java";
