@@ -260,7 +260,8 @@ function formatVersion(version) {
     
     if (version.includes("-SNAPSHOT")) {
         const revision = version.substring(version.length-17, version.length-9);
-        const branch = version.substring(0, version.length - 18);
+        const branchWithVersion = version.substring(0, version.length - 18)
+        const branch = branchWithVersion.substring(branchWithVersion.indexOf('-') + 1);
         
         return `<${VCS_TREE_URL}${revision}|${revision}> @ <${VCS_TREE_URL}${branch}|${branch}>`;
     } else {
