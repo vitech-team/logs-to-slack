@@ -65,6 +65,17 @@ const VCS_SEARCH_URL = env.VCS_SEARCH_URL;
 const VCS_FILE_URL = env.VCS_FILE_URL;
 
 /**
+ * Url prefix used to build VCS branch or tag url
+ * We use this url when display application version
+ *
+ * The final URL would be
+ *      VCS_TREE_URL + tagOrVersionName
+ *
+ * Example: https://gitlab.com/awesome-project/core/-/tree/
+ */
+const VCS_TREE_URL = env.VCS_TREE_URL;
+
+/**
  * List of project base packages.
  * Used to shorten class names in notification, because Slack forces word wrap, so long lines look ugly.
  * Multiple packages could be specified, each one is actually regexp pattern
@@ -121,7 +132,6 @@ const KIBANA_CONTEXT_URL = env.KIBANA_CONTEXT_URL;
 
 /**
  * TODO:
- *      * support version parsing
  *      * implement filters (include, exclude)
  *      * add nodejs errors support
  */
@@ -135,8 +145,12 @@ const decodeAndUnzip = (data) => {
     return JSON.parse(jsonPayload);
 }
 
-function getFileUrl(line, hasMethodName) {
-    const revision = "master";
+function getFileUrl(line, hasMethodName, version) {
+    const revision = version !== undefined && !version.includes("IS_UNDEFINED") 
+        ? (version.includes("-SNAPSHOT")
+            ? version.substring(version.length-17, version.length-9)
+            : version)
+        : "master";
     const javaFolder = "src/main/java";
 
     for (let package in PACKAGE_TO_MODULE_MAPPING) {
@@ -176,8 +190,8 @@ function formatException(line) {
     return "*" + EXCEPTION_PACKAGES.reduce((result, pattern) => result.replace(new RegExp(pattern + "\\."), ""), line) + "*";
 }
 
-function formatCallLine(line) {
-    var url = getFileUrl(line, true);
+function formatCallLine(line, version) {
+    var url = getFileUrl(line, true, version);
 
     if (url) {
         return CLASS_PACKAGES.reduce((result, pattern) => result.replace(new RegExp("at " + pattern + "\\."), ""), line)
@@ -191,7 +205,7 @@ function formatCallLine(line) {
     }
 }
 
-function formatStackTrace(stackTrace) {
+function formatStackTrace(stackTrace, version) {
     const stackTraceLines = stackTrace != null ? stackTrace.split("\n") : [];
 
     const causedByLine = line => line != "" && !line.startsWith("\t");
@@ -205,7 +219,7 @@ function formatStackTrace(stackTrace) {
         }
         if (atLine(line)) {
             if (isOurPackage(line)) {
-                result.push(formatCallLine(line));
+                result.push(formatCallLine(line, version));
             } else {
                 if (result[result.length - 1] != "\t...") {
                     result.push("\t...");
@@ -239,13 +253,31 @@ function buildKibanaUrl(logObject) {
     return null;
 }
 
+function formatVersion(version) {
+    if (version === undefined || version.includes("IS_UNDEFINED") ) {
+        return "undefined";
+    }
+    
+    if (version.includes("-SNAPSHOT")) {
+        const revision = version.substring(version.length-17, version.length-9);
+        const branchWithVersion = version.substring(0, version.length - 18)
+        const branch = branchWithVersion.substring(branchWithVersion.indexOf('-') + 1);
+        
+        return `<${VCS_TREE_URL}${revision}|${revision}> @ <${VCS_TREE_URL}${branch}|${branch}>`;
+    } else {
+        const tag = version;
+        
+        return `<${VCS_TREE_URL}${tag}|${tag}>`;
+    }
+}
+
 function prepareMessage(logObject) {
-    const formattedStackTrace =  formatStackTrace(logObject.stack_trace)
+    const formattedStackTrace = formatStackTrace(logObject.stack_trace, logObject.ver)
         .join("\n")
         .split("!@#$%^&*\n")
         .filter(str => str !== "");
-    const serviceUrl = getFileUrl(logObject.service, false);
-    const service = serviceUrl != null ? `<${serviceUrl}|${logObject.service}>` : logObject.service ;
+    const serviceUrl = getFileUrl(logObject.service, false, logObject.ver);
+    const service = serviceUrl != null ? `<${serviceUrl}|${logObject.service}>` : logObject.service;
     const messageColor = calculateColor(logObject);
     const kibanaUrl = buildKibanaUrl(logObject);
 
@@ -262,6 +294,14 @@ function prepareMessage(logObject) {
                         "text": {
                             "type": "mrkdwn",
                             "text": "*Class:* " + service
+                        },
+                        "block_id": "text0"
+                    },
+                    {
+                        "type": "section",
+                        "text": {
+                            "type": "mrkdwn",
+                            "text": "*Version:* " + formatVersion(logObject.ver)
                         },
                         "block_id": "text1"
                     },
