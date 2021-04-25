@@ -133,13 +133,13 @@ const KIBANA_CONTEXT_URL = env.KIBANA_CONTEXT_URL;
 /**
  * List of regexp filters to use to filter out not relevant logs
  *
- * Example: {
- *      "msg": "Valid authentication is missing in context",
- *      "stack_trace": "org.springframework.security.web.firewall.RequestRejectedException",
- *      "stack_trace": "java.lang.NumberFormatException: For input string: \"\""
- * }
+ * Example: [
+ *      { "msg": "Valid authentication is missing in context" },
+ *      { "stack_trace": "org.springframework.security.web.firewall.RequestRejectedException" },
+ *      { "stack_trace": "java.lang.NumberFormatException: For input string: \"\"" }
+ * ]
  */
-const EXCLUDE_FILTERS = JSON.parse(env.EXCLUDE_FILTERS || "{}");
+const EXCLUDE_FILTERS = JSON.parse(env.EXCLUDE_FILTERS || "[]");
 
 const slackAPIUrl = `hooks.slack.com`;
 
@@ -163,7 +163,7 @@ function getFileUrl(line, hasMethodName, version) {
 
         const regex = hasMethodName
             ? new RegExp(`(${package}[\\.\\d\\w_]*)(\\.[\\d\\w_$]*){2}\\(([^:]*):(\\d+)\\)`)
-            : new RegExp(`(${package}\\..*)\\.([^.]+)`);
+            : new RegExp(`(${package}.*)\\.([^.]+)`);
 
         let m;
         if ((m = regex.exec(line)) !== null) {
@@ -199,14 +199,31 @@ function formatCallLine(line, version) {
     const url = getFileUrl(line, true, version);
 
     if (url) {
-        return CLASS_PACKAGES.reduce((result, pattern) => result.replace(new RegExp("at " + pattern + "\\."), ""), line)
-            .replace(/\$\$[^\.]+\./, "$$$$.")
-            .replace(/\((.*):(\d+)\)/gm, ` : <${url}|$2>`);
-
+        let temp = CLASS_PACKAGES.reduce((result, pattern) => result.replace(new RegExp("at " + pattern + "\\."), ""), line)
+            .replace(/\(<generated>\)/, "")
+            .replace(/\$\$[^\\.]+\./, "$$$$.");
+        if (temp.includes("(")) {
+            return temp
+                .replace(/^.*\.([^\.]+\.[^\.]+)(\(.*)$/, "\t_$1_$2")
+                .replace(/\((.*):(\d+)\)/gm, ` : <${url}|$2>`);
+        } else {
+            return temp
+                .replace(/^.*\.([^\.]+\.[^\.]+)$/, "\t_$1_")
+                .replace(/\((.*):(\d+)\)/gm, ` : <${url}|$2>`);
+        }
     } else {
-        return CLASS_PACKAGES.reduce((result, pattern) => result.replace(new RegExp("at " + pattern + "\\."), ""), line)
-            .replace(/\$\$[^\.]+\./gm, "$$$$.")
-            .replace(/\((.*):(\d+)\)/gm, ` : <${VCS_SEARCH_URL}$1|$2>`);
+        let temp = CLASS_PACKAGES.reduce((result, pattern) => result.replace(new RegExp("at " + pattern + "\\."), ""), line)
+            .replace(/\(<generated>\)/, "")
+            .replace(/\$\$[^\.]+\./gm, "$$$$.");
+        if (temp.includes("(")) {
+            return temp
+                .replace(/^.*\.([^\.]+\.[^\.]+)(\(.*)$/, "\t_$1_$2")
+                .replace(/\((.*):(\d+)\)/gm, ` : <${VCS_SEARCH_URL}$1|$2>`);
+        } else {
+            return temp
+                .replace(/^.*\.([^\.]+\.[^\.]+)$/, "\t_$1_")
+                .replace(/\((.*):(\d+)\)/gm, ` : <${VCS_SEARCH_URL}$1|$2>`);
+        }
     }
 }
 
@@ -214,14 +231,14 @@ function formatStackTrace(stackTrace, version) {
     const stackTraceLines = stackTrace != null ? stackTrace.split("\n") : [];
 
     const causedByLine = line => line !== "" && !line.startsWith("\t");
-    const atLine = line => line.startsWith("\t");
+    const atLine = line => line.startsWith("\tat");
     const isOurPackage = line => CLASS_PACKAGES.some(classPackage => line.includes("at " + classPackage + "."));
 
     return stackTraceLines.reduce((result, line) => {
         if (causedByLine(line)) {
             result.push("!@#$%^&*");
             result.push(formatException(line));
-        }
+        } else
         if (atLine(line)) {
             if (isOurPackage(line)) {
                 result.push(formatCallLine(line, version));
@@ -229,6 +246,10 @@ function formatStackTrace(stackTrace, version) {
                 if (result[result.length - 1] !== "\t...") {
                     result.push("\t...");
                 }
+            }
+        } else {
+            if (!line.startsWith("\t... ") && line.trim() !== '') {
+                result.push(line);
             }
         }
 
@@ -282,7 +303,11 @@ function prepareMessage(logObject) {
         .split("!@#$%^&*\n")
         .filter(str => str !== "");
     const serviceUrl = getFileUrl(logObject.service, false, logObject.ver);
-    const service = serviceUrl != null ? `<${serviceUrl}|${logObject.service}>` : logObject.service;
+
+
+    const serviceName = CLASS_PACKAGES.reduce((res, pattern) => res.replace(new RegExp(pattern + "\\."), ""), logObject.service)
+        .replace(/\$\$[^\.]+\./gm, "$$$$.");
+    const service = serviceUrl != null ? `<${serviceUrl}|${serviceName}>` : serviceName;
     const messageColor = calculateColor(logObject);
     const kibanaUrl = buildKibanaUrl(logObject);
 
@@ -340,11 +365,20 @@ function prepareMessage(logObject) {
 
     if (formattedStackTrace) {
         formattedStackTrace.forEach(elem => {
+            let joined = "";
+            for(const line of elem.split("\n")) {
+                if ((joined + line).length > 3000) {
+                    break;
+                }
+                joined = joined + line + "\n";
+            }
+            joined = joined.replace(/\s+\.\.\.\s+$/, "");
+
             result.attachments[0].blocks.push({
                 "type": "section",
                 "text": {
                     "type": "mrkdwn",
-                    "text": elem
+                    "text": joined.trim().substring(0, 3000)
                 }
             });
         });
@@ -379,8 +413,15 @@ async function notifySlack(message) {
 }
 
 function exclude(logObject) {
-    for (const [key, value] of Object.entries(EXCLUDE_FILTERS)) {
-        if (logObject[key] && logObject[key].match(value)) {
+    for (const entry of EXCLUDE_FILTERS) {
+        let matched = true;
+        for (const [key, value] of Object.entries(entry)) {
+            if (!logObject[key] || !logObject[key].match(value)) {
+                matched = false;
+                break;
+            }
+        }
+        if (matched) {
             return false;
         }
     }
