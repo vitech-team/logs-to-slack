@@ -311,6 +311,8 @@ function prepareMessage(logObject) {
     const messageColor = calculateColor(logObject);
     const kibanaUrl = buildKibanaUrl(logObject);
 
+    const internalError = logObject.internalError;
+
     const result = {
         "channel": CHANNEL_NAME,
         "text": `*${APPLICATION_NAME}* @ ${logObject.time}`,
@@ -382,6 +384,16 @@ function prepareMessage(logObject) {
                 }
             });
         });
+    }
+    if (internalError) {
+        result.attachments[0].blocks.push(
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": `*Status code: ${internalError}*`
+                },
+            });
     }
 
     return result;
