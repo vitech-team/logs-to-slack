@@ -386,7 +386,9 @@ function prepareMessage(logObject) {
         });
     }
     if (internalError) {
-        result.attachments[0].blocks.push(
+        result.attachments[0].blocks.splice(
+            1,
+            0,
             {
                 "type": "section",
                 "text": {
