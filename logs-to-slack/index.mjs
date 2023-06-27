@@ -1,6 +1,21 @@
+import { createRequire } from 'module'
+const require = createRequire(import.meta.url);
 const https = require('https');
 const zlib = require('zlib');
 const {env} = require('process');
+import { S3Client, PutObjectCommand} from '@aws-sdk/client-s3';
+
+/**
+ * AWS region lambda and s3 are used
+ *
+ * Example: us-east-1
+ */
+const REGION = env.REGION;
+
+const s3 = new S3Client({
+    region: env.REGION
+});
+
 
 /**
  * This lambda expects the following log message format:
@@ -143,6 +158,33 @@ const EXCLUDE_FILTERS = JSON.parse(env.EXCLUDE_FILTERS || "[]");
 
 const slackAPIUrl = `hooks.slack.com`;
 
+/**
+ * S3 bucket name to used for placing memory errors
+ *
+ * Example: stage-memory-errors
+ */
+const BUCKET_NAME = env.MEMORY_ERRORS_BUCKET;
+
+/**
+ * Slack API path provided via Slack admin portal for memory errors
+ *
+ * Example: /services/aaaaaaa/bbbbbbb/cccccccccc
+ */
+const MEMORY_SLACK_URL = env.MEMORY_SLACK_WEBHOOK_URL;
+
+/**
+ * List of mapping between memory error details and folderPath on s3
+ *
+ * Example: [
+ *     {"folderName": "outOfMemory",            "text": "OutOfMemoryError"},
+ *     {"folderName": "communicationsFailure",  "text": "Communications link failure"},
+ *     {"folderName": "resultSetError",         "text": "Not a navigable ResultSet"},
+ *     {"folderName": "resultSetError",         "text": "could not extract ResultSett"}
+ * ]
+ */
+const MEMORY_ERROR_FILTERS = JSON.parse(env.MEMORY_ERRORS_RULES);
+
+
 // Decode from base64, unzip and parse CloudWatch event payload
 const decodeAndUnzip = (data) => {
     const compressedPayload = Buffer.from(data, 'base64');
@@ -158,12 +200,12 @@ function getFileUrl(line, hasMethodName, version) {
         : "master";
     const javaFolder = "src/main/java";
 
-    for (let package in PACKAGE_TO_MODULE_MAPPING) {
-        let modulePath = PACKAGE_TO_MODULE_MAPPING[package];
+    for (let packageName in PACKAGE_TO_MODULE_MAPPING) {
+        let modulePath = PACKAGE_TO_MODULE_MAPPING[packageName];
 
         const regex = hasMethodName
-            ? new RegExp(`(${package}[\\.\\d\\w_]*)(\\.[\\d\\w_$]*){2}\\(([^:]*):(\\d+)\\)`)
-            : new RegExp(`(${package}.*)\\.([^.]+)`);
+            ? new RegExp(`(${packageName}[\\.\\d\\w_]*)(\\.[\\d\\w_$]*){2}\\(([^:]*):(\\d+)\\)`)
+            : new RegExp(`(${packageName}.*)\\.([^.]+)`);
 
         let m;
         if ((m = regex.exec(line)) !== null) {
@@ -314,7 +356,7 @@ function prepareMessage(logObject) {
     const internalError = logObject.internalError;
 
     const result = {
-        "channel": CHANNEL_NAME,
+        //"channel": CHANNEL_NAME,
         "text": `*${APPLICATION_NAME}* @ ${logObject.time}`,
         "icon_emoji": ":aws:",
         "attachments": [
@@ -401,13 +443,21 @@ function prepareMessage(logObject) {
     return result;
 }
 
+async function notifyMemorySlack(message) {
+    return notifySlackPath(message, MEMORY_SLACK_URL);
+}
+
 // Send Slack message
 async function notifySlack(message) {
+    return notifySlackPath(message, SLACK_PATH);
+}
+
+async function notifySlackPath(message, slackPath) {
     return new Promise((resolve, reject) => {
         const options = {
             "method": "POST",
             "hostname": slackAPIUrl,
-            "path": SLACK_PATH,
+            "path": slackPath,
             "headers": {
                 "Content-Type": "application/json"
             }
@@ -424,6 +474,18 @@ async function notifySlack(message) {
         req.write(JSON.stringify(message));
         req.end();
     });
+}
+
+async function uploadErrorToS3(message) {
+    const params = {
+        Bucket : BUCKET_NAME,
+        Key: `${message.folderName}/${message.time}.log`,
+        Body: JSON.stringify(message)
+    };
+    const command = new PutObjectCommand(params);
+    var resp = s3.send(command);
+    console.log(resp)
+    return resp;
 }
 
 function exclude(logObject) {
@@ -443,20 +505,60 @@ function exclude(logObject) {
     return true;
 }
 
-exports.handler = async (event, context) => {
-    context.callbackWaitsForEmptyEventLoop = false;
+function processMemoryErrors(logObject) {
+    let memoryError = false;
+    MEMORY_ERROR_FILTERS.forEach(filter => {
+        if (logObject.stack_trace && logObject.stack_trace.indexOf(filter.text) !== -1) {
+            logObject.folderName = filter.folderName;
+            memoryError = true;
+            return true;
+        }
+    });
+    return memoryError;
+}
+
+function parseError(error){
+    try {
+        return JSON.parse(error.message);
+    } catch (e) {
+        return {
+            msg: error.message,
+            stack_trace: error.message,
+            time: error.timestamp,
+            uuid: "null",
+            sev: error.message.index.of('WARN') > 0 ? "WARN" : "ERROR",
+            app: "Immediate Pay Core",
+            service: "null",
+            ver: "null"
+        };
+    }
+}
+
+export async function handler(event) {
 
     const data = decodeAndUnzip(event.awslogs.data);
 
-    await Promise.all(data
-        .logEvents
+    const allErrors = data.logEvents
         .map(m => {
-            let e = JSON.parse(m.message);
+            let e = parseError(m);
             e.id = m.id;
             return e;
-        })
+        });
+
+    let errorNotifications = allErrors
         .filter(exclude)
         .sort((a, b) => new Date(a.time).getTime() - new Date(b.time).getTime())
-        .map(prepareMessage)
-        .map(notifySlack));
+        .map(prepareMessage);
+    let memoryNotification = allErrors
+        .filter(processMemoryErrors)
+        .sort((a, b) => new Date(a.time).getTime() - new Date(b.time).getTime());
+
+    const allRequests = [...
+        errorNotifications.map(notifySlack),
+        memoryNotification.map(prepareMessage).map(notifyMemorySlack),
+        memoryNotification.map(uploadErrorToS3)
+    ];
+
+    await Promise.all(allRequests);
+
 }
